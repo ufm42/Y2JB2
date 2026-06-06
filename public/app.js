@@ -1,4 +1,4 @@
-const SERVER_IP = "192.168.1.2"; // server.js ip
+const SERVER_IP = "192.168.1.2"; // server.js IP
 const SERVER_PORT = "4747";
 
 function load_script(src, remote = true) {
